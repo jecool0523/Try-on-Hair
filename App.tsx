@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, RefreshCw, Scissors, ChevronRight, Activity, ShoppingBag, X, Upload, Plus, Download, AlertCircle, Sparkles } from 'lucide-react';
 import CameraFeed, { CameraFeedHandle } from './components/CameraFeed';
@@ -5,6 +6,9 @@ import { analyzeFaceImage, generateTryOnImage } from './services/geminiService';
 import { supabase } from './services/supabaseClient';
 import { HAIRSTYLE_CATALOG } from './constants'; // Fallback catalog
 import { FaceAnalysis, AppState, HairstyleItem } from './types';
+
+// NOTE: We rely on window.aistudio which is injected by the IDX environment.
+// We avoid declaring it on Window interface globally to prevent type conflicts with existing definitions.
 
 function App() {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
@@ -16,12 +20,46 @@ function App() {
   const [uploadedHairstyles, setUploadedHairstyles] = useState<HairstyleItem[]>([]);
   const [dbHairstyles, setDbHairstyles] = useState<HairstyleItem[]>([]);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(false);
   
   const cameraRef = useRef<CameraFeedHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const styleInputRef = useRef<HTMLInputElement>(null);
 
   // --- Initialization ---
+
+  // Check for API Key on mount
+  useEffect(() => {
+    const checkApiKey = async () => {
+      // 1. Check if window.aistudio is available (Project IDX / AI Studio)
+      const win = window as any;
+      if (win.aistudio) {
+        const selected = await win.aistudio.hasSelectedApiKey();
+        if (selected) {
+          setHasApiKey(true);
+        }
+      } 
+      // 2. Check if process.env.API_KEY is already set (Standard Deployment)
+      else if (process.env.API_KEY) {
+        setHasApiKey(true);
+      }
+    };
+    checkApiKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    const win = window as any;
+    if (win.aistudio) {
+      try {
+        await win.aistudio.openSelectKey();
+        // Assume success to proceed, preventing race conditions
+        setHasApiKey(true);
+      } catch (err) {
+        console.error("Failed to select key:", err);
+        setErrorMsg("Failed to select API Key. Please try again.");
+      }
+    }
+  };
   
   useEffect(() => {
     const fetchCatalog = async () => {
@@ -232,6 +270,42 @@ function App() {
 
   // Combine Uploaded items + DB items
   const fullCatalog = [...uploadedHairstyles, ...dbHairstyles];
+
+  // If API Key is missing and we are in an environment that supports selection (like IDX),
+  // block the UI and ask for a key.
+  const win = window as any;
+  if (!hasApiKey && typeof window !== 'undefined' && win.aistudio) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md">
+        <div className="glass-panel p-8 rounded-2xl max-w-md text-center space-y-6 animate-in zoom-in duration-300">
+          <div className="w-16 h-16 bg-gradient-to-tr from-pink-500 to-indigo-500 rounded-full mx-auto flex items-center justify-center shadow-lg shadow-pink-500/30">
+             <Sparkles className="w-8 h-8 text-white" />
+          </div>
+          <h2 className="text-2xl font-bold bg-gradient-to-r from-pink-300 to-indigo-300 bg-clip-text text-transparent">
+            API Key Required
+          </h2>
+          <p className="text-gray-300 leading-relaxed text-sm">
+            To use the Magic Mirror AI features, you need to select a Google Cloud API key with Gemini access.
+          </p>
+          <button 
+            onClick={handleSelectKey}
+            className="glass-button w-full py-4 rounded-xl text-white font-bold tracking-widest uppercase hover:bg-white/10 transition-all shadow-[0_0_30px_rgba(236,72,153,0.3)] flex items-center justify-center gap-2"
+          >
+            <Sparkles className="w-5 h-5" />
+            <span>Select API Key</span>
+          </button>
+          <a 
+            href="https://ai.google.dev/gemini-api/docs/billing" 
+            target="_blank" 
+            rel="noreferrer" 
+            className="block text-xs text-white/40 hover:text-white/80 transition-colors"
+          >
+            About Billing & API Keys
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-screen h-screen overflow-hidden font-sans selection:bg-pink-500/30">

@@ -2,21 +2,26 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { FaceAnalysis } from "../types";
 
-// Ensure API Key is available
-const apiKey = process.env.API_KEY || '';
-
-const ai = new GoogleGenAI({ apiKey });
+// Helper to get client with current key
+// We initialize this lazily to ensure we catch any runtime injections of the API key
+// (e.g. via window.aistudio selection)
+const getAiClient = () => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key is missing.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
 /**
  * Analyzes a face image to estimate shape and features.
  */
 export const analyzeFaceImage = async (base64Image: string): Promise<FaceAnalysis> => {
-  if (!apiKey) throw new Error("API Key is missing");
-
   // Remove data URL prefix if present for processing
   const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
 
   try {
+    const ai = getAiClient();
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: {
@@ -69,8 +74,7 @@ export const generateTryOnImage = async (
   hairstyleDescription: string,
   referenceImageBase64?: string
 ): Promise<string> => {
-  if (!apiKey) throw new Error("API Key is missing");
-
+  
   const cleanPersonBase64 = personImageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
 
   try {
@@ -108,6 +112,7 @@ export const generateTryOnImage = async (
       });
     }
 
+    const ai = getAiClient();
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-image", 
       contents: {
