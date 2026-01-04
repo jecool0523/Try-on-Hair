@@ -1,36 +1,79 @@
-import React, { useState, useRef } from 'react';
-import { Camera, RefreshCw, Shirt, ChevronRight, Activity, ShoppingBag, X, Upload, Image as ImageIcon, Plus, Download, AlertCircle } from 'lucide-react';
+
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, RefreshCw, Scissors, ChevronRight, Activity, ShoppingBag, X, Upload, Plus, Download, AlertCircle, Sparkles } from 'lucide-react';
 import CameraFeed, { CameraFeedHandle } from './components/CameraFeed';
-import { analyzeBodyImage, generateTryOnImage } from './services/geminiService';
-import { CLOTHING_CATALOG } from './constants';
-import { BodyAnalysis, AppState, ClothingItem } from './types';
+import { analyzeFaceImage, generateTryOnImage } from './services/geminiService';
+import { supabase } from './services/supabaseClient';
+import { HAIRSTYLE_CATALOG } from './constants'; // Fallback catalog
+import { FaceAnalysis, AppState, HairstyleItem } from './types';
 
 function App() {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
-  const [analysis, setAnalysis] = useState<BodyAnalysis | null>(null);
-  const [selectedClothing, setSelectedClothing] = useState<ClothingItem | null>(null);
+  const [analysis, setAnalysis] = useState<FaceAnalysis | null>(null);
+  const [selectedHairstyle, setSelectedHairstyle] = useState<HairstyleItem | null>(null);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [userSnapshot, setUserSnapshot] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [uploadedClothing, setUploadedClothing] = useState<ClothingItem[]>([]);
+  const [uploadedHairstyles, setUploadedHairstyles] = useState<HairstyleItem[]>([]);
+  const [dbHairstyles, setDbHairstyles] = useState<HairstyleItem[]>([]);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   
   const cameraRef = useRef<CameraFeedHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const clothingInputRef = useRef<HTMLInputElement>(null);
+  const styleInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Initialization ---
+  
+  useEffect(() => {
+    const fetchCatalog = async () => {
+      setIsLoadingCatalog(true);
+      
+      // If Supabase is not configured (client is null), fallback immediately
+      if (!supabase) {
+        setDbHairstyles(HAIRSTYLE_CATALOG);
+        setIsLoadingCatalog(false);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('hairstyles') // Changed table name target
+          .select('*');
+        
+        if (error) {
+          // If table doesn't exist (42P01) or other error, fallback to static data
+          if (error.code === '42P01' || error.message.includes('Could not find the table')) {
+             console.warn('Database table "hairstyles" not found. Using static catalog.');
+          } else {
+             console.warn('Error fetching from DB, using fallback:', error.message);
+          }
+          setDbHairstyles(HAIRSTYLE_CATALOG);
+        } else if (data && data.length > 0) {
+          setDbHairstyles(data as HairstyleItem[]);
+        } else {
+           setDbHairstyles(HAIRSTYLE_CATALOG);
+        }
+      } catch (err: any) {
+        console.warn('Supabase connection issue, using fallback:', err.message || err);
+        setDbHairstyles(HAIRSTYLE_CATALOG);
+      } finally {
+        setIsLoadingCatalog(false);
+      }
+    };
+
+    fetchCatalog();
+  }, []);
 
   // --- Utilities ---
 
   /**
    * Standardizes an uploaded image to match the "Mirror" aspect ratio (9:16).
-   * This ensures the AI receives a consistent size similar to the webcam feed,
-   * improving synthesis quality for uploaded photos.
    */
   const standardizeImage = (base64Str: string): Promise<string> => {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        // Target resolution: HD Portrait (similar to Magic Mirror feed)
         const targetWidth = 1080;
         const targetHeight = 1920;
         
@@ -43,11 +86,9 @@ function App() {
           return;
         }
 
-        // Fill background with black (mirror style)
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, targetWidth, targetHeight);
 
-        // Calculate aspect ratio to "fit" the image inside (contain)
         const scale = Math.min(targetWidth / img.width, targetHeight / img.height);
         const x = (targetWidth / 2) - (img.width / 2) * scale;
         const y = (targetHeight / 2) - (img.height / 2) * scale;
@@ -64,11 +105,8 @@ function App() {
 
   const handleError = (error: any) => {
     console.error(error);
-    setErrorMsg("Connection interrupted. Please ensure API Key is valid and try again.");
+    setErrorMsg("Something went wrong. Please check your connection or try again.");
     
-    // Improved Error Handling:
-    // If we fail during Try-On, go back to SHOPPING so the user doesn't lose their photo/clothes.
-    // Only reset to IDLE if we failed during the initial Analysis.
     if (appState === AppState.GENERATING_TRYON) {
       setAppState(AppState.SHOPPING);
     } else {
@@ -78,17 +116,14 @@ function App() {
     setTimeout(() => setErrorMsg(null), 5000);
   };
 
-  const handleScanBody = async () => {
+  const handleScanFace = async () => {
     if (!cameraRef.current) return;
     
-    // Simulate "Success" posture detection
     cameraRef.current.triggerPoseSuccess();
     
-    // Slight delay to allow the user to see the green success state
     setTimeout(async () => {
         const snapshot = cameraRef.current?.captureFrame();
         if (!snapshot) return;
-        // No need to resize camera frame as it's already captured from the video feed
         await processUserImage(snapshot);
     }, 600);
   };
@@ -99,7 +134,6 @@ function App() {
       const reader = new FileReader();
       reader.onloadend = async () => {
         const rawBase64 = reader.result as string;
-        // Standardize the uploaded image before processing
         const standardizedImage = await standardizeImage(rawBase64);
         await processUserImage(standardizedImage);
       };
@@ -111,7 +145,7 @@ function App() {
     setUserSnapshot(imageSrc);
     setAppState(AppState.ANALYZING);
     try {
-        const result = await analyzeBodyImage(imageSrc);
+        const result = await analyzeFaceImage(imageSrc);
         setAnalysis(result);
         setAppState(AppState.SHOPPING);
       } catch (err) {
@@ -119,39 +153,37 @@ function App() {
       }
   }
 
-  const handleClothingUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStyleUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        const newItem: ClothingItem = {
+        const newItem: HairstyleItem = {
           id: `custom-${Date.now()}`,
-          name: 'Custom Piece',
+          name: 'Custom Look',
           category: 'Uploaded',
-          description: 'A custom uploaded clothing item',
+          description: 'A custom uploaded hairstyle reference',
           image: reader.result as string,
           isCustom: true
         };
-        setUploadedClothing(prev => [newItem, ...prev]);
-        setSelectedClothing(newItem);
+        setUploadedHairstyles(prev => [newItem, ...prev]);
+        setSelectedHairstyle(newItem);
       };
       reader.readAsDataURL(file);
     }
   };
 
   const handleTryOn = async () => {
-    if (!selectedClothing || !userSnapshot) return;
+    if (!selectedHairstyle || !userSnapshot) return;
 
     setAppState(AppState.GENERATING_TRYON);
     
     try {
-      // If it's a custom uploaded item, we pass the image string.
-      // If it's a catalog item, we just pass the text description.
-      const customImage = selectedClothing.isCustom ? selectedClothing.image : undefined;
+      const customImage = selectedHairstyle.isCustom ? selectedHairstyle.image : undefined;
       
       const resultImage = await generateTryOnImage(
         userSnapshot, 
-        selectedClothing.description,
+        selectedHairstyle.description,
         customImage
       );
       
@@ -166,7 +198,7 @@ function App() {
     if (generatedImage) {
       const link = document.createElement('a');
       link.href = generatedImage;
-      link.download = `magic-mirror-tryon-${Date.now()}.png`;
+      link.download = `magic-mirror-hair-${Date.now()}.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -176,26 +208,24 @@ function App() {
   const resetProcess = () => {
     setAppState(AppState.IDLE);
     setGeneratedImage(null);
-    setSelectedClothing(null);
+    setSelectedHairstyle(null);
     setAnalysis(null);
     setUserSnapshot(null);
-    setUploadedClothing([]);
+    setUploadedHairstyles([]);
   };
 
-  // Combine static catalog with uploaded items
-  const fullCatalog = [...uploadedClothing, ...CLOTHING_CATALOG];
+  // Combine Uploaded items + DB items
+  const fullCatalog = [...uploadedHairstyles, ...dbHairstyles];
 
   return (
     <div className="relative w-screen h-screen overflow-hidden font-sans selection:bg-pink-500/30">
       
       {/* Hidden Inputs */}
       <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
-      <input type="file" ref={clothingInputRef} onChange={handleClothingUpload} accept="image/*" className="hidden" />
+      <input type="file" ref={styleInputRef} onChange={handleStyleUpload} accept="image/*" className="hidden" />
 
       {/* Layer 1: Background/Camera */}
-      {/* Show Camera Feed unless we have a snapshot uploaded/taken AND we are in Result phase */}
       <div className={`absolute inset-0 transition-all duration-700 ${userSnapshot ? 'blur-sm opacity-50' : 'opacity-100'}`}>
-         {/* If no snapshot, show camera. If snapshot exists (uploaded or taken), show that snapshot as background */}
          {!userSnapshot ? (
             <CameraFeed isActive={appState === AppState.IDLE || appState === AppState.ANALYZING} ref={cameraRef} />
          ) : (
@@ -220,8 +250,8 @@ function App() {
         {/* Header */}
         <header className="flex justify-between items-start">
           <div className="glass-panel px-6 py-4 rounded-2xl flex flex-col">
-            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-cyan-300 to-purple-300 bg-clip-text text-transparent">Magic Mirror</h1>
-            <p className="text-xs text-gray-300 uppercase tracking-widest mt-1">Virtual Atelier</p>
+            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-pink-300 to-indigo-300 bg-clip-text text-transparent">Magic Mirror</h1>
+            <p className="text-xs text-gray-300 uppercase tracking-widest mt-1">Hair Studio</p>
           </div>
           
           {/* Status Chip */}
@@ -229,10 +259,10 @@ function App() {
             <div className={`w-2 h-2 rounded-full shadow-[0_0_10px_currentColor] ${appState === AppState.IDLE ? 'bg-green-400 text-green-400 animate-pulse' : 'bg-purple-400 text-purple-400'}`}></div>
             <span className="text-xs font-bold uppercase tracking-wider text-white/90">
               {appState === AppState.IDLE && "Ready to Scan"}
-              {appState === AppState.ANALYZING && "Analyzing Anatomy..."}
-              {appState === AppState.SHOPPING && "Select Attire"}
-              {appState === AppState.GENERATING_TRYON && "Weaving Fabric..."}
-              {appState === AppState.RESULT && "Fitting Complete"}
+              {appState === AppState.ANALYZING && "Analyzing Features..."}
+              {appState === AppState.SHOPPING && "Select Style"}
+              {appState === AppState.GENERATING_TRYON && "Styling Hair..."}
+              {appState === AppState.RESULT && "New Look Ready"}
             </span>
           </div>
         </header>
@@ -249,7 +279,7 @@ function App() {
         {(appState === AppState.ANALYZING || appState === AppState.GENERATING_TRYON) && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500 to-purple-500 rounded-full blur-xl opacity-50 animate-pulse"></div>
+              <div className="absolute inset-0 bg-gradient-to-tr from-pink-500 to-indigo-500 rounded-full blur-xl opacity-50 animate-pulse"></div>
               <div className="glass-card p-10 rounded-full">
                 <RefreshCw className="w-12 h-12 text-white animate-spin" />
               </div>
@@ -261,26 +291,26 @@ function App() {
         <div className={`pointer-events-auto transition-all duration-700 transform ${analysis ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0'} absolute left-6 md:left-12 top-40 w-72`}>
           {analysis && (
             <div className="glass-panel p-6 rounded-2xl space-y-5 hover:bg-white/10 transition-colors">
-              <div className="flex items-center gap-3 text-purple-300 border-b border-white/10 pb-3">
-                <Activity className="w-5 h-5" />
-                <h2 className="font-bold uppercase tracking-widest text-sm">Body Metrics</h2>
+              <div className="flex items-center gap-3 text-pink-300 border-b border-white/10 pb-3">
+                <Sparkles className="w-5 h-5" />
+                <h2 className="font-bold uppercase tracking-widest text-sm">Face Analysis</h2>
               </div>
               
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
-                  <label className="text-white/60 text-xs uppercase">Height</label>
-                  <div className="text-white font-medium">{analysis.heightEstimate}</div>
+                  <label className="text-white/60 text-xs uppercase">Shape</label>
+                  <div className="text-white font-medium">{analysis.faceShape}</div>
                 </div>
                 <div className="flex justify-between items-center">
-                  <label className="text-white/60 text-xs uppercase">Shape</label>
-                  <div className="text-white font-medium">{analysis.bodyShape}</div>
+                  <label className="text-white/60 text-xs uppercase">Skin Tone</label>
+                  <div className="text-white font-medium">{analysis.skinTone}</div>
                 </div>
                  <div className="flex justify-between items-center">
-                  <label className="text-white/60 text-xs uppercase">Size</label>
-                  <div className="text-cyan-300 font-bold text-xl">{analysis.suggestedSize}</div>
+                  <label className="text-white/60 text-xs uppercase">Current</label>
+                  <div className="text-pink-300 font-bold text-sm text-right">{analysis.currentHairTexture}</div>
                 </div>
                  <div className="pt-3 border-t border-white/10">
-                  <label className="text-white/60 text-xs uppercase block mb-1">Stylist Note</label>
+                  <label className="text-white/60 text-xs uppercase block mb-1">Stylist Tip</label>
                   <p className="text-white/90 italic text-xs leading-relaxed font-light">"{analysis.styleAdvice}"</p>
                 </div>
               </div>
@@ -291,24 +321,31 @@ function App() {
         {/* Bottom Interface */}
         <div className="pointer-events-auto flex flex-col md:flex-row items-end md:items-center justify-between w-full mt-auto gap-6">
           
-          {/* Clothing Selector */}
+          {/* Hairstyle Selector */}
           {appState === AppState.SHOPPING && (
             <div className="w-full md:w-auto overflow-x-auto flex gap-4 pb-4 md:pb-0 scroll-smooth px-2 py-4 mask-gradient">
               {/* Upload Card */}
               <button
-                onClick={() => clothingInputRef.current?.click()}
+                onClick={() => styleInputRef.current?.click()}
                 className="glass-card flex-shrink-0 w-32 md:w-40 aspect-[3/4] rounded-2xl flex flex-col items-center justify-center gap-2 hover:bg-white/10 transition-all border-dashed border-2 border-white/30 text-white/70 hover:text-white hover:border-white"
               >
                 <Plus className="w-8 h-8" />
                 <span className="text-xs font-bold uppercase">Upload</span>
               </button>
 
+              {/* Loading State for DB items */}
+              {isLoadingCatalog && (
+                <div className="flex-shrink-0 w-32 md:w-40 aspect-[3/4] rounded-2xl glass-card flex items-center justify-center animate-pulse">
+                   <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                </div>
+              )}
+
               {/* Catalog Items */}
-              {fullCatalog.map((item) => (
+              {!isLoadingCatalog && fullCatalog.map((item) => (
                 <button
                   key={item.id}
-                  onClick={() => setSelectedClothing(item)}
-                  className={`relative group flex-shrink-0 w-32 md:w-40 aspect-[3/4] rounded-2xl overflow-hidden transition-all duration-300 ${selectedClothing?.id === item.id ? 'ring-2 ring-cyan-400 scale-105 shadow-[0_0_30px_rgba(34,211,238,0.3)]' : 'opacity-80 hover:opacity-100 hover:scale-105'}`}
+                  onClick={() => setSelectedHairstyle(item)}
+                  className={`relative group flex-shrink-0 w-32 md:w-40 aspect-[3/4] rounded-2xl overflow-hidden transition-all duration-300 ${selectedHairstyle?.id === item.id ? 'ring-2 ring-pink-400 scale-105 shadow-[0_0_30px_rgba(236,72,153,0.3)]' : 'opacity-80 hover:opacity-100 hover:scale-105'}`}
                 >
                   <div className="absolute inset-0 bg-gray-900">
                     <img src={item.image} alt={item.name} className="w-full h-full object-cover opacity-90 group-hover:opacity-100" />
@@ -335,11 +372,11 @@ function App() {
                   <Upload className="w-6 h-6" />
                 </button>
                 <button 
-                  onClick={handleScanBody}
+                  onClick={handleScanFace}
                   className="glass-button px-8 py-4 rounded-full text-white font-bold tracking-widest uppercase hover:bg-white/10 transition-all shadow-[0_0_30px_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(74,222,128,0.3)] flex items-center gap-3"
                 >
                   <Camera className="w-6 h-6" />
-                  <span>Scan Body</span>
+                  <span>Scan Face</span>
                 </button>
               </div>
             )}
@@ -348,12 +385,12 @@ function App() {
             {appState === AppState.SHOPPING && (
               <button 
                 onClick={handleTryOn}
-                disabled={!selectedClothing}
-                className={`glass-button px-8 py-4 rounded-full font-bold tracking-widest uppercase flex items-center gap-3 transition-all ${selectedClothing ? 'text-white shadow-[0_0_40px_rgba(168,85,247,0.4)] hover:shadow-[0_0_60px_rgba(168,85,247,0.6)] bg-white/10' : 'text-gray-500 cursor-not-allowed opacity-50'}`}
+                disabled={!selectedHairstyle}
+                className={`glass-button px-8 py-4 rounded-full font-bold tracking-widest uppercase flex items-center gap-3 transition-all ${selectedHairstyle ? 'text-white shadow-[0_0_40px_rgba(236,72,153,0.4)] hover:shadow-[0_0_60px_rgba(236,72,153,0.6)] bg-white/10' : 'text-gray-500 cursor-not-allowed opacity-50'}`}
               >
-                <Shirt className="w-6 h-6" />
-                <span>Try On</span>
-                {selectedClothing && <ChevronRight className="w-5 h-5 animate-pulse" />}
+                <Scissors className="w-6 h-6" />
+                <span>Style Hair</span>
+                {selectedHairstyle && <ChevronRight className="w-5 h-5 animate-pulse" />}
               </button>
             )}
 
@@ -373,7 +410,7 @@ function App() {
                   className="glass-button px-6 py-3 rounded-xl text-white font-semibold flex items-center gap-2 hover:bg-white/10"
                 >
                   <ShoppingBag className="w-5 h-5" />
-                  <span>Shop</span>
+                  <span>Gallery</span>
                 </button>
                 <button 
                   onClick={resetProcess}

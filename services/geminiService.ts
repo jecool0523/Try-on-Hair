@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
-import { BodyAnalysis } from "../types";
+import { FaceAnalysis } from "../types";
 
 // Ensure API Key is available
 const apiKey = process.env.API_KEY || '';
@@ -7,9 +8,9 @@ const apiKey = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
 
 /**
- * Analyzes a body image to estimate measurements and shape.
+ * Analyzes a face image to estimate shape and features.
  */
-export const analyzeBodyImage = async (base64Image: string): Promise<BodyAnalysis> => {
+export const analyzeFaceImage = async (base64Image: string): Promise<FaceAnalysis> => {
   if (!apiKey) throw new Error("API Key is missing");
 
   // Remove data URL prefix if present for processing
@@ -27,8 +28,8 @@ export const analyzeBodyImage = async (base64Image: string): Promise<BodyAnalysi
             },
           },
           {
-            text: `Analyze this person's body structure for a clothing try-on application. 
-                   Estimate relative proportions. Be polite and professional.
+            text: `Analyze this person's face for a hairstyle try-on application. 
+                   Identify face shape, skin tone, and current hair. Be polite and professional.
                    Provide the output strictly in JSON format.`,
           },
         ],
@@ -38,13 +39,13 @@ export const analyzeBodyImage = async (base64Image: string): Promise<BodyAnalysi
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            heightEstimate: { type: Type.STRING, description: "Estimated height description (e.g., 'Tall', 'Average')" },
-            shoulderWidth: { type: Type.STRING, description: "Description of shoulder width" },
-            bodyShape: { type: Type.STRING, description: "General body shape description (e.g., 'Athletic', 'Slim', 'Curvy')" },
-            suggestedSize: { type: Type.STRING, description: "Suggested clothing size (S, M, L, XL)" },
-            styleAdvice: { type: Type.STRING, description: "One sentence fashion advice based on body shape" },
+            faceShape: { type: Type.STRING, description: "Estimated face shape (e.g., 'Oval', 'Square', 'Heart', 'Round')" },
+            skinTone: { type: Type.STRING, description: "Description of skin tone" },
+            currentHairTexture: { type: Type.STRING, description: "Current hair texture (e.g., 'Straight', 'Curly', 'Wavy')" },
+            hairColorEstimate: { type: Type.STRING, description: "Current hair color" },
+            styleAdvice: { type: Type.STRING, description: "One sentence hairstyle advice based on face shape" },
           },
-          required: ["heightEstimate", "shoulderWidth", "bodyShape", "suggestedSize", "styleAdvice"],
+          required: ["faceShape", "skinTone", "currentHairTexture", "hairColorEstimate", "styleAdvice"],
         },
       },
     });
@@ -52,7 +53,7 @@ export const analyzeBodyImage = async (base64Image: string): Promise<BodyAnalysi
     const text = response.text;
     if (!text) throw new Error("No response from AI");
     
-    return JSON.parse(text) as BodyAnalysis;
+    return JSON.parse(text) as FaceAnalysis;
   } catch (error) {
     console.error("Analysis failed:", error);
     throw error;
@@ -60,14 +61,13 @@ export const analyzeBodyImage = async (base64Image: string): Promise<BodyAnalysi
 };
 
 /**
- * Generates a "Virtual Try-On" image.
- * Uses the image model to modify the user's clothes.
- * Supports either a text description OR a reference clothing image.
+ * Generates a "Hair Try-On" image.
+ * Uses the image model to modify the user's hair.
  */
 export const generateTryOnImage = async (
   personImageBase64: string, 
-  clothingDescription: string,
-  clothingImageBase64?: string
+  hairstyleDescription: string,
+  referenceImageBase64?: string
 ): Promise<string> => {
   if (!apiKey) throw new Error("API Key is missing");
 
@@ -83,27 +83,28 @@ export const generateTryOnImage = async (
       }
     ];
 
-    // If we have a custom clothing image, add it to the prompt parts
-    if (clothingImageBase64) {
-      const cleanClothingBase64 = clothingImageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
+    // If we have a reference hairstyle image, add it to the prompt parts
+    if (referenceImageBase64) {
+      const cleanRefBase64 = referenceImageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
       parts.push({
         inlineData: {
           mimeType: "image/jpeg",
-          data: cleanClothingBase64,
+          data: cleanRefBase64,
         },
       });
       parts.push({
-        text: `Using the second image (clothing) as a reference, dress the person in the first image with this item.
-               Maintain the person's exact face, identity, pose, and background. 
-               Adapt the fit to the person's body.
+        text: `Using the second image (hairstyle) as a reference, apply this hairstyle to the person in the first image.
+               Maintain the person's exact face features, skin texture, makeup, and clothing. 
+               Only change the hair. Blend it naturally with the forehead and ears.
                Make it look photorealistic.`,
       });
     } else {
       // Standard Text-based Try On
       parts.push({
-        text: `Replace the person's current outfit with: ${clothingDescription}. 
-               Maintain the person's exact face, identity, pose, and background. 
-               Make it look photorealistic. High fashion photography style.`,
+        text: `Change the person's hairstyle to: ${hairstyleDescription}. 
+               Maintain the person's exact face features, expression, skin texture, and current clothing. 
+               Only modify the hair.
+               Make it look photorealistic. High quality salon photography.`,
       });
     }
 
