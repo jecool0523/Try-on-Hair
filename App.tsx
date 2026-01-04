@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, RefreshCw, Scissors, ChevronRight, Activity, ShoppingBag, X, Upload, Plus, Download, AlertCircle, Sparkles } from 'lucide-react';
 import CameraFeed, { CameraFeedHandle } from './components/CameraFeed';
@@ -105,14 +104,31 @@ function App() {
 
   const handleError = (error: any) => {
     console.error(error);
-    setErrorMsg("Something went wrong. Please check your connection or try again.");
     
+    // Default message
+    let message = "Something went wrong. Please check your connection or try again.";
+    
+    // Extract specific error message if available
+    if (error instanceof Error) {
+        message = error.message;
+        // Improve clarity for missing API key
+        if (message.includes("API Key") || message.includes("API_KEY")) {
+            message = "System Configuration Error: API Key is missing or invalid.";
+        }
+    } else if (typeof error === 'string') {
+        message = error;
+    }
+    
+    setErrorMsg(message);
+    
+    // Recover state based on where we were
     if (appState === AppState.GENERATING_TRYON) {
       setAppState(AppState.SHOPPING);
     } else {
       setAppState(AppState.IDLE);
     }
     
+    // Clear error after 5 seconds
     setTimeout(() => setErrorMsg(null), 5000);
   };
 
@@ -269,9 +285,9 @@ function App() {
 
         {/* Error Notification */}
         {errorMsg && (
-          <div className="absolute top-32 left-1/2 transform -translate-x-1/2 glass-panel border-l-4 border-red-500 text-white px-8 py-4 rounded-xl shadow-2xl animate-bounce flex items-center gap-3">
+          <div className="absolute top-32 left-1/2 transform -translate-x-1/2 glass-panel border-l-4 border-red-500 text-white px-8 py-4 rounded-xl shadow-2xl animate-bounce flex items-center gap-3 z-50">
             <AlertCircle className="w-5 h-5 text-red-500" />
-            <span>{errorMsg}</span>
+            <span className="font-medium text-sm">{errorMsg}</span>
           </div>
         )}
 
